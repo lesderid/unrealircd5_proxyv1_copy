@@ -1,5 +1,5 @@
 /*
- * UnrealIRCd 5 PROXYv1 module
+ * UnrealIRCd 5 PROXYv1 copy module
  *
  * Copyright (C) 2020 Les De Ridder <les@lesderid.net>
  *
@@ -23,17 +23,17 @@
 
 ModuleHeader MOD_HEADER
 = {
-  "third/proxyv1",
+  "third/proxyv1_copy",
   "0.0.1",
   "Copy received packets via PROXY v1",
   "Les De Ridder <les@lesderid.net>",
   "unrealircd-5"
 };
 
-int proxyv1_rawpacket_in(Client *sptr, char *readbuf, int *length);
-int proxyv1_handshake(Client *sptr);
-int proxyv1_local_quit(Client *sptr, MessageTag *mtags, char *comment);
-#define proxyv1_unkuser_quit proxyv1_local_quit
+int proxyv1_copy_rawpacket_in(Client *sptr, char *readbuf, int *length);
+int proxyv1_copy_handshake(Client *sptr);
+int proxyv1_copy_local_quit(Client *sptr, MessageTag *mtags, char *comment);
+#define proxyv1_copy_unkuser_quit proxyv1_copy_local_quit
 
 char *getserverip(Client *client);
 
@@ -45,15 +45,16 @@ MOD_TEST()
 
 MOD_INIT()
 {
-  HookAdd(modinfo->handle, HOOKTYPE_RAWPACKET_IN, 0, proxyv1_rawpacket_in);
-  HookAdd(modinfo->handle, HOOKTYPE_HANDSHAKE, 0, proxyv1_handshake);
-  HookAdd(modinfo->handle, HOOKTYPE_LOCAL_QUIT, 0, proxyv1_local_quit);
-  HookAdd(modinfo->handle, HOOKTYPE_UNKUSER_QUIT, 0, proxyv1_unkuser_quit);
+  HookAdd(modinfo->handle, HOOKTYPE_RAWPACKET_IN, 0, proxyv1_copy_rawpacket_in);
+  HookAdd(modinfo->handle, HOOKTYPE_HANDSHAKE, 0, proxyv1_copy_handshake);
+  HookAdd(modinfo->handle, HOOKTYPE_LOCAL_QUIT, 0, proxyv1_copy_local_quit);
+  HookAdd(modinfo->handle, HOOKTYPE_UNKUSER_QUIT, 0, proxyv1_copy_unkuser_quit);
   return MOD_SUCCESS;
 }
 
 MOD_LOAD()
 {
+  //TODO: Send existing users, channels
   return MOD_SUCCESS;
 }
 
@@ -62,22 +63,20 @@ MOD_UNLOAD()
   return MOD_SUCCESS;
 }
 
-int proxyv1_rawpacket_in(Client *sptr, char *readbuf, int *length)
+int proxyv1_copy_rawpacket_in(Client *sptr, char *readbuf, int *length)
 {
   if (*length < 0)
   {
     printf("received 0 len\n");
   }
 
-  printf("received packet (len=%d): %.*s\n", *length, *length, readbuf);
+  printf("received packet (len=%d): %.*s", *length, *length, readbuf);
 
   return 1; //continue parsing
 }
 
-int proxyv1_handshake(Client *sptr)
+int proxyv1_copy_handshake(Client *sptr)
 {
-  printf("client handshake\n");
-
   if (!sptr->local)
     return 0;
 
@@ -95,7 +94,7 @@ int proxyv1_handshake(Client *sptr)
   return 0; //no significance
 }
 
-int proxyv1_local_quit(Client *sptr, MessageTag *mtags, char *comment)
+int proxyv1_copy_local_quit(Client *sptr, MessageTag *mtags, char *comment)
 {
   printf("client quit: %s\n", comment); //no significance
 

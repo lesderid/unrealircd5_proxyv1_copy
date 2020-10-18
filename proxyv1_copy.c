@@ -36,12 +36,19 @@ ModDataInfo *proxyv1_copy_moddata_info;
 
 int proxyv1_copy_rawpacket_in(Client *sptr, char *readbuf, int *length);
 int proxyv1_copy_handshake(Client *sptr);
+void proxyv1_copy_connect(Client *client);
+void proxyv1_copy_send_initial(Client *client);
+void proxyv1_copy_send(Client *client, char *buffer, size_t length);
+
+//HACK: sizeof(long) is not guaranteed to be 2*sizeof(int)
+#define MODDATA_SOCKET(moddata) (((int*)&(moddata).l)[0])
+#define MODDATA_SENDINITIAL(moddata) (((int*)&(moddata).l)[1])
+#define CLIENT_SOCKET(client) MODDATA_SOCKET(moddata_client(client, proxyv1_copy_moddata_info))
+#define CLIENT_SENDINITIAL(client) MODDATA_SENDINITIAL(moddata_client(client, proxyv1_copy_moddata_info))
 
 void proxyv1_copy_moddata_free(ModData *m);
 
 char *getserverip(Client *client);
-
-#define CLIENT_SOCKET(client) (moddata_client(client, proxyv1_copy_moddata_info).i)
 
 MOD_TEST()
 {
@@ -73,7 +80,21 @@ MOD_INIT()
 
 MOD_LOAD()
 {
-  //TODO: Send existing users (including mode, away status), channels
+  Client *client;
+  list_for_each_entry(client, &lclient_list, lclient_node)
+  {
+    printf("[proxyv1_copy] nick=\"%s\", fd=%d\n", client->name, CLIENT_SOCKET(client));
+
+    if (!CLIENT_SOCKET(client))
+    {
+      CLIENT_SENDINITIAL(client) = true;
+
+      proxyv1_copy_connect(client);
+    }
+  }
+
+  //TODO: Send channels (+ modes, topics, ops)
+  //TODO: Send vhosts too
   return MOD_SUCCESS;
 }
 
@@ -82,17 +103,48 @@ MOD_UNLOAD()
   return MOD_SUCCESS;
 }
 
-int proxyv1_copy_rawpacket_in(Client *sptr, char *readbuf, int *length)
+void proxyv1_copy_send(Client *client, char *buffer, size_t length)
+{
+  ssize_t sent = send(CLIENT_SOCKET(client), buffer, length, 0);
+  if (sent < 0)
+  {
+    fprintf(stderr, "[proxyv1_copy] send returned %ld\n", sent);
+  }
+}
+
+void proxyv1_copy_send_initial(Client *client)
+{
+  fprintf(stderr, "[proxyv1_copy] sending initial data for client \"%s\"\n", client->name);
+
+  char line[512 + 1];
+  size_t length;
+
+  if (client->name)
+  {
+    length = sprintf(line, "NICK %s\r\n", client->name);
+    proxyv1_copy_send(client, line, length);
+  }
+
+  //TODO: Check if umodes is correct
+  if (client->user && client->user->username && client->info)
+  {
+    length = sprintf(line, "USER %s %ld * :%s\r\n",
+	client->user->username,
+	client->umodes,
+	client->info);
+    proxyv1_copy_send(client, line, length);
+  }
+
+  CLIENT_SENDINITIAL(client) = false;
+}
+
+int proxyv1_copy_rawpacket_in(Client *client, char *readbuf, int *length)
 {
   if (*length < 0)
     return 1;
 
   //TODO: Fix potential race with proxyv1_copy_on_connected
-  ssize_t sent = send(CLIENT_SOCKET(sptr), readbuf, *length, 0);
-  if (sent < 0)
-  {
-    fprintf(stderr, "[proxyv1_copy] send returned %ld\n", sent);
-  }
+  proxyv1_copy_send(client, readbuf, *length);
 
   return 1; //continue parsing
 }
@@ -112,13 +164,12 @@ void proxyv1_copy_on_connected(int fd, int revents, void *data)
       client->local->port,
       client->local->listener->port);
 
-  ssize_t sent = send(fd, proxy_header, header_size, 0);
-  if (sent < 0)
-  {
-    fprintf(stderr, "[proxyv1_copy] send returned %ld\n", sent);
-  }
-
   CLIENT_SOCKET(client) = fd;
+
+  proxyv1_copy_send(client, proxy_header, header_size);
+
+  if (CLIENT_SENDINITIAL(client))
+    proxyv1_copy_send_initial(client);
 }
 
 void proxyv1_copy_connect(Client *client)
@@ -151,7 +202,7 @@ int proxyv1_copy_handshake(Client *sptr)
 
 void proxyv1_copy_moddata_free(ModData *m)
 {
-  int fd = m->i;
+  int fd = MODDATA_SOCKET(*m);
   fd_close(fd);
 }
 

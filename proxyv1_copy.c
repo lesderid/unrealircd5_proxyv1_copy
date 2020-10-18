@@ -30,16 +30,22 @@ ModuleHeader MOD_HEADER
   "unrealircd-5"
 };
 
+struct sockaddr_in target_addr;
+
+ModDataInfo *proxyv1_copy_moddata_info;
+
 int proxyv1_copy_rawpacket_in(Client *sptr, char *readbuf, int *length);
 int proxyv1_copy_handshake(Client *sptr);
-int proxyv1_copy_local_quit(Client *sptr, MessageTag *mtags, char *comment);
-#define proxyv1_copy_unkuser_quit proxyv1_copy_local_quit
+
+void proxyv1_copy_moddata_free(ModData *m);
 
 char *getserverip(Client *client);
 
+#define CLIENT_SOCKET(client) (moddata_client(client, proxyv1_copy_moddata_info).i)
+
 MOD_TEST()
 {
-  /* Test here */
+  //TODO: Test config
   return MOD_SUCCESS;
 }
 
@@ -47,14 +53,27 @@ MOD_INIT()
 {
   HookAdd(modinfo->handle, HOOKTYPE_RAWPACKET_IN, 0, proxyv1_copy_rawpacket_in);
   HookAdd(modinfo->handle, HOOKTYPE_HANDSHAKE, 0, proxyv1_copy_handshake);
-  HookAdd(modinfo->handle, HOOKTYPE_LOCAL_QUIT, 0, proxyv1_copy_local_quit);
-  HookAdd(modinfo->handle, HOOKTYPE_UNKUSER_QUIT, 0, proxyv1_copy_unkuser_quit);
+
+  ModDataInfo moddata_info;
+  memset(&moddata_info, 0, sizeof(moddata_info));
+  moddata_info.name = "proxyv1_copy";
+  moddata_info.serialize = NULL;
+  moddata_info.unserialize = NULL;
+  moddata_info.free = proxyv1_copy_moddata_free;
+  moddata_info.sync = 0;
+  moddata_info.type = MODDATATYPE_CLIENT;
+  proxyv1_copy_moddata_info = ModDataAdd(modinfo->handle, moddata_info);
+
+  target_addr.sin_family = AF_INET;
+  target_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+  target_addr.sin_port = htons(6667);
+
   return MOD_SUCCESS;
 }
 
 MOD_LOAD()
 {
-  //TODO: Send existing users, channels
+  //TODO: Send existing users (including mode, away status), channels
   return MOD_SUCCESS;
 }
 
@@ -66,13 +85,58 @@ MOD_UNLOAD()
 int proxyv1_copy_rawpacket_in(Client *sptr, char *readbuf, int *length)
 {
   if (*length < 0)
+    return 1;
+
+  //TODO: Fix potential race with proxyv1_copy_on_connected
+  ssize_t sent = send(CLIENT_SOCKET(sptr), readbuf, *length, 0);
+  if (sent < 0)
   {
-    printf("received 0 len\n");
+    fprintf(stderr, "[proxyv1_copy] send returned %ld\n", sent);
   }
 
-  printf("received packet (len=%d): %.*s", *length, *length, readbuf);
-
   return 1; //continue parsing
+}
+
+void proxyv1_copy_on_connected(int fd, int revents, void *data)
+{
+  fd_setselect(fd, FD_SELECT_WRITE, NULL, NULL);
+
+  Client *client = data;
+
+  char proxy_header[5 + 1 + 4 + 1 + HOSTLEN + 1 + HOSTLEN + 1 + 5 + 1 + 5 + 1 + 2 + 1];
+  int header_size = sprintf(proxy_header,
+      "PROXY %s %s %s %d %d\r\n",
+      IsIPV6(client) ? "TCP6" : "TCP4",
+      client->local->sockhost,
+      getserverip(client),
+      client->local->port,
+      client->local->listener->port);
+
+  ssize_t sent = send(fd, proxy_header, header_size, 0);
+  if (sent < 0)
+  {
+    fprintf(stderr, "[proxyv1_copy] send returned %ld\n", sent);
+  }
+
+  CLIENT_SOCKET(client) = fd;
+}
+
+void proxyv1_copy_connect(Client *client)
+{
+  int fd;
+  if ((fd = fd_socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0, "proxyv1_copy")) < 0)
+  {
+    fprintf(stderr, "[proxyv1_copy] socket() error: %s\n", strerror(errno));
+  }
+
+  int ret = connect(fd, (struct sockaddr*)&target_addr, sizeof(target_addr));
+  if (ret < 0 && errno != EINPROGRESS)
+  {
+    fprintf(stderr, "[proxyv1_copy] connect() error: %s\n", strerror(errno));
+    return;
+  }
+
+  fd_setselect(fd, FD_SELECT_WRITE, proxyv1_copy_on_connected, client);
 }
 
 int proxyv1_copy_handshake(Client *sptr)
@@ -80,25 +144,15 @@ int proxyv1_copy_handshake(Client *sptr)
   if (!sptr->local)
     return 0;
 
-  char proxy_header[5 + 1 + 4 + 1 + HOSTLEN + 1 + HOSTLEN + 1 + 5 + 1 + 5 + 1 + 2 + 1];
-  sprintf(proxy_header,
-      "PROXY %s %s %s %d %d\r\n",
-      IsIPV6(sptr) ? "TCP6" : "TCP4",
-      sptr->local->sockhost,
-      getserverip(sptr),
-      sptr->local->port,
-      sptr->local->listener->port);
-
-  printf(proxy_header);
+  proxyv1_copy_connect(sptr);
 
   return 0; //no significance
 }
 
-int proxyv1_copy_local_quit(Client *sptr, MessageTag *mtags, char *comment)
+void proxyv1_copy_moddata_free(ModData *m)
 {
-  printf("client quit: %s\n", comment); //no significance
-
-  return 0; //no significance
+  int fd = m->i;
+  fd_close(fd);
 }
 
 //Code adapted from UnrealIRCd5's getpeerip, src/socket.c (GPLv2)

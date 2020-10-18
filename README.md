@@ -16,6 +16,8 @@ Place [proxyv1\_copy.c](/proxyv1_copy.c) in `src/modules/third`, and run `make` 
 ## Configuration
 
 ```
+loadmodule "third/proxyv1_copy";
+
 proxyv1_copy {
     ip "target-server-ip";
     port target-server-port;

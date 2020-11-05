@@ -97,7 +97,7 @@ MOD_LOAD()
   Client *client;
   list_for_each_entry(client, &lclient_list, lclient_node)
   {
-    printf("[proxyv1_copy] nick=\"%s\", fd=%d\n", client->name, CLIENT_SOCKET(client));
+    //fprintf(stderr, "[proxyv1_copy] nick=\"%s\", fd=%d\n", client->name, CLIENT_SOCKET(client));
 
     if (!CLIENT_SOCKET(client))
     {
@@ -196,7 +196,7 @@ void proxyv1_copy_send_initial_channel(Channel *channel)
   char line[512 + 1];
   size_t length;
 
-  printf("channel name: %s\n", channel->chname);
+  //fprintf(stderr, "channel name: %s\n", channel->chname);
 
   //1. find most privileged member
   Member *most_privileged = NULL;
@@ -223,7 +223,7 @@ void proxyv1_copy_send_initial_channel(Channel *channel)
   }
   else
   {
-    printf("most_privileged = %s\n", most_privileged->client->name);
+    //fprintf(stderr, "most_privileged = %s\n", most_privileged->client->name);
   }
 
   //2. join as most privileged member

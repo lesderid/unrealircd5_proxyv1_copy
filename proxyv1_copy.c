@@ -61,6 +61,7 @@ void proxyv1_copy_on_incoming(int fd, int revents, void *data);
 void proxyv1_copy_moddata_free(ModData *m);
 
 char *getserverip(Client *client);
+char *getclientip(Client *client);
 
 int clients_to_init = -1;
 
@@ -419,7 +420,7 @@ void proxyv1_copy_on_connected(int fd, int revents, void *data)
   int header_size = sprintf(proxy_header,
       "PROXY %s %s %s %d %d\r\n",
       IsIPV6(client) ? "TCP6" : "TCP4",
-      client->local->sockhost,
+      getclientip(client),
       getserverip(client),
       client->local->port,
       client->local->listener->port);
@@ -478,7 +479,7 @@ void proxyv1_copy_moddata_free(ModData *m)
   fd_close(fd);
 }
 
-//Code adapted from UnrealIRCd5's getpeerip, src/socket.c (GPLv2)
+//Adapted from UnrealIRCd5's getpeerip, src/socket.c (GPLv2)
 //Copyright (C) 1990 Jarkko Oikarinen and University of Oulu, Computing Center.
 char *getserverip(Client *client)
 {
@@ -499,6 +500,32 @@ char *getserverip(Client *client)
     int len = sizeof(addr);
 
     if (getsockname(client->local->fd, (struct sockaddr *)&addr, &len) < 0)
+      return NULL;
+    return inetntop(AF_INET, &addr.sin_addr.s_addr, ret, sizeof(ret));
+  }
+}
+
+//Adapted from UnrealIRCd5's getpeerip, src/socket.c (GPLv2)
+//Copyright (C) 1990 Jarkko Oikarinen and University of Oulu, Computing Center.
+char *getclientip(Client *client)
+{
+  static char ret[HOSTLEN+1];
+
+  if (IsIPV6(client))
+  {
+    struct sockaddr_in6 addr;
+    int len = sizeof(addr);
+
+    if (getpeername(client->local->fd, (struct sockaddr *)&addr, &len) < 0)
+      return NULL;
+    return inetntop(AF_INET6, &addr.sin6_addr.s6_addr, ret, sizeof(ret));
+  }
+  else
+  {
+    struct sockaddr_in addr;
+    int len = sizeof(addr);
+
+    if (getpeername(client->local->fd, (struct sockaddr *)&addr, &len) < 0)
       return NULL;
     return inetntop(AF_INET, &addr.sin_addr.s_addr, ret, sizeof(ret));
   }

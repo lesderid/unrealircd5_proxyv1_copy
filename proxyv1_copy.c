@@ -23,6 +23,8 @@
 
 #include <poll.h>
 
+//TODO: Disable module when PROXY server is unavailable?
+
 ModuleHeader MOD_HEADER
 = {
   "third/proxyv1_copy",

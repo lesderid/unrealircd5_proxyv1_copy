@@ -52,6 +52,9 @@ size_t proxyv1_copy_recv(Client *client, char *buffer, size_t length);
 void proxyv1_copy_on_connected(int fd, int revents, void *data);
 void proxyv1_copy_on_incoming(int fd, int revents, void *data);
 
+int proxyv1_copy_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs);
+int proxyv1_copy_config_run(ConfigFile *cf, ConfigEntry *ce, int type);
+
 //HACK: sizeof(long) is not guaranteed to be 2*sizeof(int)
 #define MODDATA_SOCKET(moddata) (((int*)&(moddata).l)[0])
 #define MODDATA_SENDINITIAL(moddata) (((int*)&(moddata).l)[1])
@@ -67,14 +70,73 @@ int clients_to_init = -1;
 
 MOD_TEST()
 {
-  //TODO: Test config
+  HookAdd(modinfo->handle, HOOKTYPE_CONFIGTEST, 0, proxyv1_copy_config_test);
   return MOD_SUCCESS;
+}
+
+#ifndef CheckNull
+#define CheckNull(x) if ((!(x)->ce_vardata) || (!(*((x)->ce_vardata)))) { config_error("%s:%i: missing parameter", (x)->ce_fileptr->cf_filename, (x)->ce_varlinenum); errors++; continue; }
+#endif
+
+//Adapted from UnrealIRCd5's websocket_config_test, src/modules/websocket.c (GPLv2)
+//Copyright (C) 2016 Bram Matthys and the UnrealIRCd team
+int proxyv1_copy_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
+{
+  int errors = 0;
+  int ip_set = 0;
+  int port_set = 0;
+  static char errored_once_nick = 0;
+
+  if (type != CONFIG_MAIN)
+    return 0;
+
+  if (!ce || !ce->ce_varname || strcmp(ce->ce_varname, "proxyv1_copy"))
+    return 0;
+
+  for (ConfigEntry *cep = ce->ce_entries; cep; cep = cep->ce_next)
+  {
+    if (!strcmp(cep->ce_varname, "ip"))
+    {
+      CheckNull(cep);
+      ip_set = 1;
+    }
+    else if (!strcmp(cep->ce_varname, "port"))
+    {
+      CheckNull(cep);
+      port_set = 1;
+    }
+    else
+    {
+      config_error("%s:%i: unknown directive proxyv1_copy::%s",
+          cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_varname);
+      errors++;
+      continue;
+    }
+  }
+
+  if (!ip_set)
+  {
+    config_error("%s:%i: proxyv1_copy set, but IP unspecified. Use something like: proxyv1_copy { ip 127.0.0.1; port 6667; }",
+        ce->ce_fileptr->cf_filename, ce->ce_varlinenum);
+    errors++;
+  }
+
+  if (!port_set)
+  {
+    config_error("%s:%i: proxyv1_copy set, but port unspecified. Use something like: proxyv1_copy { ip 127.0.0.1; port 6667; }",
+        ce->ce_fileptr->cf_filename, ce->ce_varlinenum);
+    errors++;
+  }
+
+  *errs = errors;
+  return errors ? -1 : 1;
 }
 
 MOD_INIT()
 {
   HookAdd(modinfo->handle, HOOKTYPE_RAWPACKET_IN, 0, proxyv1_copy_rawpacket_in);
   HookAdd(modinfo->handle, HOOKTYPE_HANDSHAKE, 0, proxyv1_copy_handshake);
+  HookAdd(modinfo->handle, HOOKTYPE_CONFIGRUN, 0, proxyv1_copy_config_run);
 
   ModDataInfo moddata_info;
   memset(&moddata_info, 0, sizeof(moddata_info));
@@ -87,10 +149,35 @@ MOD_INIT()
   proxyv1_copy_moddata_info = ModDataAdd(modinfo->handle, moddata_info);
 
   target_addr.sin_family = AF_INET;
-  target_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-  target_addr.sin_port = htons(6667);
 
   return MOD_SUCCESS;
+}
+
+//Adapted from UnrealIRCd5's websocket_config_run_ex, src/modules/websocket.c (GPLv2)
+//Copyright (C) 2016 Bram Matthys and the UnrealIRCd team
+int proxyv1_copy_config_run(ConfigFile *cf, ConfigEntry *ce, int type)
+{
+  if (type != CONFIG_MAIN)
+    return 0;
+
+  if (!ce || !ce->ce_varname || strcmp(ce->ce_varname, "proxyv1_copy"))
+    return 0;
+
+  for (ConfigEntry *cep = ce->ce_entries; cep; cep = cep->ce_next)
+  {
+    if (!strcmp(cep->ce_varname, "ip"))
+    {
+      target_addr.sin_addr.s_addr = inet_addr(cep->ce_vardata);
+    }
+    else if (!strcmp(cep->ce_varname, "port"))
+    {
+      int port;
+      sscanf(cep->ce_vardata, "%d", &port);
+      target_addr.sin_port = htons(port);
+    }
+  }
+
+  return 0;
 }
 
 MOD_LOAD()
@@ -105,9 +192,9 @@ MOD_LOAD()
       CLIENT_SENDINITIAL(client) = true;
 
       if (clients_to_init == -1)
-	clients_to_init = 1;
+        clients_to_init = 1;
       else
-	clients_to_init++;
+        clients_to_init++;
     }
   }
 
@@ -169,14 +256,14 @@ void proxyv1_copy_send_blocking(Client *client, char *buffer, size_t length)
   struct pollfd poll_fd = { .fd = fd, .events = POLLIN };
   switch (poll(&poll_fd, 1, 100))
   {
-      case -1:
-	  //fprintf(stderr, "[proxyv1_copy] poll returned -1 (PROXY server down?)\n");
-          return;
-      case 0:
-          break;
-      default:
-	  proxyv1_copy_on_incoming(0, 0, client);
-          break;
+    case -1:
+      //fprintf(stderr, "[proxyv1_copy] poll returned -1 (PROXY server down?)\n");
+      return;
+    case 0:
+      break;
+    default:
+      proxyv1_copy_on_incoming(0, 0, client);
+      break;
   }
 
   int flags = fcntl(fd, F_GETFL);
@@ -209,9 +296,9 @@ void proxyv1_copy_send_initial_channel(Channel *channel)
       break;
     }
     else if (most_privileged == NULL
-	|| (member->flags & CHFL_HALFOP && !(most_privileged->flags & CHFL_HALFOP_OR_HIGHER))
-	|| (member->flags & CHFL_CHANOP && !(most_privileged->flags & CHFL_CHANOP_OR_HIGHER))
-	|| (member->flags & CHFL_CHANADMIN && !(most_privileged->flags & CHFL_CHANADMIN)))
+        || (member->flags & CHFL_HALFOP && !(most_privileged->flags & CHFL_HALFOP_OR_HIGHER))
+        || (member->flags & CHFL_CHANOP && !(most_privileged->flags & CHFL_CHANOP_OR_HIGHER))
+        || (member->flags & CHFL_CHANADMIN && !(most_privileged->flags & CHFL_CHANADMIN)))
     {
       most_privileged = member;
     }
@@ -328,7 +415,7 @@ void proxyv1_copy_send_initial_channel_list_mode(Channel *channel, Member *most_
       if (!banner && strcmp(ban->who, member->client->name) == 0)
       {
         banner = member;
-	break;
+        break;
       }
     }
     if (!banner || !(banner->flags & CHFL_HALFOP_OR_HIGHER))
@@ -369,9 +456,9 @@ void proxyv1_copy_send_initial_client(Client *client)
   if (client->user && client->user->username && client->info)
   {
     length = sprintf(line, "USER %s %ld * :%s\r\n",
-	client->user->username,
-	client->umodes,
-	client->info);
+        client->user->username,
+        client->umodes,
+        client->info);
     proxyv1_copy_send(client, line, length);
   }
 
